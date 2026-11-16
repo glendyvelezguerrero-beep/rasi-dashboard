@@ -1,0 +1,802 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RASI - Direcciones y Unidades</title>
+
+<style>
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 14px;
+  background: #102333;
+  color: #172b43;
+  font-family: Arial, sans-serif;
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 20px;
+  margin-bottom: 12px;
+  border: 1px solid #9bc8df;
+  border-radius: 10px;
+  background: #155570;
+  color: white;
+}
+
+header h1 {
+  margin: 0;
+  font-size: 25px;
+}
+
+header p {
+  margin: 6px 0 0;
+  font-size: 14px;
+}
+
+.marca {
+  font-size: 32px;
+  font-weight: bold;
+  letter-spacing: 3px;
+}
+
+.controles {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 12px;
+  color: #e0edf6;
+}
+
+button {
+  padding: 10px 16px;
+  border: 1px solid #a6cfe4;
+  border-radius: 7px;
+  background: #155570;
+  color: white;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+#mensaje {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.tablero {
+  display: grid;
+  grid-template-columns: 0.95fr repeat(3, 1fr);
+  gap: 12px;
+}
+
+.tarjeta {
+  min-width: 0;
+  overflow: hidden;
+  text-align: center;
+  background: linear-gradient(145deg, #e2f1f8, #b5d0e0);
+  border: 2px solid #e1f3ff;
+  border-radius: 12px;
+  padding-bottom: 14px;
+}
+
+.tarjeta h2 {
+  margin: 0;
+  padding: 10px;
+  background: #155570;
+  color: white;
+  font-size: 19px;
+}
+
+.general {
+  grid-row: span 2;
+  display: flex;
+  flex-direction: column;
+}
+
+.general .contenido {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.subtitulo {
+  margin: 18px 8px 0;
+  color: #155570;
+  font-size: 14px;
+  font-weight: bold;
+}
+
+svg {
+  display: block;
+  width: 100%;
+  max-width: 340px;
+  margin: auto;
+}
+
+.pista,
+.avance {
+  fill: none;
+  stroke-width: 22;
+}
+
+.pista {
+  stroke: #edf2f5;
+}
+
+.avance {
+  stroke: #8596a2;
+}
+
+text {
+  fill: #172b43;
+  text-anchor: middle;
+}
+
+.numero {
+  font-size: 42px;
+  font-weight: bold;
+}
+
+.meta {
+  font-size: 16px;
+}
+
+.extremo {
+  font-size: 13px;
+}
+
+.porcentaje {
+  display: inline-block;
+  padding: 6px 18px;
+  border: 1px solid #879eac;
+  border-radius: 7px;
+  background: #e5edf2;
+  font-size: 24px;
+  font-weight: bold;
+}
+
+.estado {
+  margin-top: 8px;
+  font-size: 14px;
+  font-weight: bold;
+}
+
+@media (max-width: 1000px) {
+  .tablero {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .general {
+    grid-column: 1 / -1;
+    grid-row: auto;
+  }
+}
+
+@media (max-width: 650px) {
+  body {
+    padding: 8px;
+  }
+
+  .tablero {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+  }
+
+  header h1 {
+    font-size: 19px;
+  }
+
+  .marca {
+    font-size: 22px;
+  }
+
+  .controles {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 420px) {
+  .tablero {
+    grid-template-columns: 1fr;
+  }
+}
+</style>
+</head>
+
+<body>
+<header>
+  <div>
+    <h1>Direcciones y Unidades</h1>
+    <p>Seguimiento de órdenes operacionales</p>
+  </div>
+  <div class="marca">RASI</div>
+</header>
+
+<div class="controles">
+  <button id="boton" type="button" disabled>
+    Conectando…
+  </button>
+
+  <span id="mensaje" role="status">
+    Cargando ArcGIS…
+  </span>
+</div>
+
+<main id="tablero" class="tablero"></main>
+
+<script src="https://js.arcgis.com/4.31/"></script>
+
+<script>
+(function () {
+  "use strict";
+
+  const DIRECCIONES = [
+    "DNPJ",
+    "DINASED",
+    "DINIC",
+    "DNIA",
+    "DINAE",
+    "DINAF"
+  ];
+
+  const PORTAL =
+    "https://daigeografia.policia.gob.ec/portal";
+
+  const SERVICIO =
+    "https://daigeografia.policia.gob.ec/server/rest/services/Hosted/tabla_metas_host/FeatureServer";
+
+  const APP_ID = "7m2AbpLnHeTQUF46";
+
+  // Límites propuestos para clasificar el cumplimiento.
+  const LIMITE_CRITICO = 50;
+  const LIMITE_ADECUADO = 80;
+
+  const $ = id => document.getElementById(id);
+
+  const formato = new Intl.NumberFormat("es-EC", {
+    maximumFractionDigits: 1
+  });
+
+  function crearTarjeta(id, titulo, general) {
+    const tarjeta = document.createElement("section");
+
+    tarjeta.className =
+      "tarjeta" + (general ? " general" : "");
+
+    tarjeta.innerHTML = `
+      <h2>${titulo}</h2>
+
+      <div class="contenido">
+        ${general
+          ? '<p class="subtitulo">CONSOLIDADO GENERAL</p>'
+          : ''}
+
+        <svg viewBox="0 0 300 200"
+             role="img"
+             aria-labelledby="${id}-lectura">
+
+          <title id="${id}-lectura">
+            Sin consultar
+          </title>
+
+          <path class="pista"
+                d="M40 145 A110 110 0 0 1 260 145"/>
+
+          <path id="${id}-arco"
+                class="avance"
+                d="M40 145 A110 110 0 0 1 260 145"
+                pathLength="100"
+                stroke-dasharray="0 100"/>
+
+          <text id="${id}-valor"
+                class="numero"
+                x="150"
+                y="120">—</text>
+
+          <text id="${id}-meta"
+                class="meta"
+                x="150"
+                y="148">Sin consultar</text>
+
+          <text class="extremo"
+                x="40"
+                y="178">0</text>
+
+          <text id="${id}-maximo"
+                class="extremo"
+                x="260"
+                y="178">—</text>
+        </svg>
+
+        <div>
+          <span id="${id}-porcentaje"
+                class="porcentaje">—</span>
+        </div>
+
+        <div id="${id}-estado"
+             class="estado">Sin consultar</div>
+      </div>
+    `;
+
+    $("tablero").appendChild(tarjeta);
+  }
+
+  crearTarjeta("TOTAL", "DGIN", true);
+
+  DIRECCIONES.forEach(function (direccion) {
+    crearTarjeta(direccion, direccion, false);
+  });
+
+  function limpiarTarjeta(id, estado) {
+    $(id + "-valor").textContent = "—";
+    $(id + "-meta").textContent = "Datos no disponibles";
+    $(id + "-maximo").textContent = "—";
+
+    $(id + "-porcentaje").textContent = "—";
+    $(id + "-porcentaje").style.background = "#e5edf2";
+
+    $(id + "-arco").setAttribute(
+      "stroke-dasharray",
+      "0 100"
+    );
+
+    $(id + "-estado").textContent = estado;
+    $(id + "-lectura").textContent = estado;
+  }
+
+  function mostrar(id, valor, meta) {
+    $(id + "-valor").textContent =
+      formato.format(valor);
+
+    $(id + "-meta").textContent =
+      "de " + formato.format(meta);
+
+    $(id + "-maximo").textContent =
+      formato.format(meta);
+
+    if (meta <= 0) {
+      $(id + "-arco").setAttribute(
+        "stroke-dasharray",
+        "0 100"
+      );
+
+      $(id + "-porcentaje").textContent = "Sin meta";
+
+      $(id + "-porcentaje").style.background =
+        "#e5edf2";
+
+      $(id + "-estado").textContent =
+        "Porcentaje no calculable";
+
+      $(id + "-lectura").textContent =
+        "Sin meta mayor que cero";
+
+      return;
+    }
+
+    const porcentaje = valor / meta * 100;
+
+    // El porcentaje conserva su valor real.
+    // El arco se llena como máximo hasta el 100 %.
+    const avance = Math.max(
+      0,
+      Math.min(100, porcentaje)
+    );
+
+    let color;
+    let fondo;
+    let estado;
+
+    if (porcentaje < LIMITE_CRITICO) {
+      color = "#dc2525";
+      fondo = "#ffd6d6";
+      estado = "Crítico";
+
+    } else if (porcentaje < LIMITE_ADECUADO) {
+      color = "#ffc400";
+      fondo = "#fff0aa";
+      estado = "En riesgo";
+
+    } else {
+      color = "#15943b";
+      fondo = "#cceecb";
+      estado = "Adecuado";
+    }
+
+    $(id + "-arco").style.stroke = color;
+
+    $(id + "-arco").setAttribute(
+      "stroke-dasharray",
+      avance + " " + (100 - avance)
+    );
+
+    $(id + "-porcentaje").textContent =
+      formato.format(porcentaje) + " %";
+
+    $(id + "-porcentaje").style.background = fondo;
+
+    $(id + "-estado").textContent = estado;
+
+    $(id + "-lectura").textContent =
+      formato.format(valor) + " de " +
+      formato.format(meta) + ". " +
+      formato.format(porcentaje) +
+      " por ciento. " + estado + ".";
+  }
+
+  function leerValores(atributos) {
+    if (
+      !atributos ||
+      atributos.ejecutadas == null ||
+      atributos.meta_total == null
+    ) {
+      return null;
+    }
+
+    const valor = Number(atributos.ejecutadas);
+    const meta = Number(atributos.meta_total);
+
+    if (
+      !Number.isFinite(valor) ||
+      !Number.isFinite(meta)
+    ) {
+      return null;
+    }
+
+    return { valor, meta };
+  }
+
+  if (typeof window.require !== "function") {
+    $("mensaje").textContent =
+      "No se pudo cargar ArcGIS. Comprueba el acceso a js.arcgis.com.";
+
+    return;
+  }
+
+  require([
+    "esri/identity/OAuthInfo",
+    "esri/identity/IdentityManager",
+    "esri/request"
+
+  ], function (OAuthInfo, identity, request) {
+
+    let tablaURL = null;
+    let temporizador = null;
+    let ocupado = false;
+
+    identity.registerOAuthInfos([
+      new OAuthInfo({
+        appId: APP_ID,
+        portalUrl: PORTAL,
+        popup: false
+      })
+    ]);
+
+    async function pedir(url, parametros = {}) {
+      const respuesta = await request(url, {
+        query: {
+          ...parametros,
+          f: "json"
+        },
+        responseType: "json",
+        timeout: 30000
+      });
+
+      const datos = respuesta.data;
+
+      if (datos.error) {
+        throw new Error(
+          datos.error.message || "Error de ArcGIS"
+        );
+      }
+
+      return datos;
+    }
+
+    async function encontrarTabla() {
+      const servicio = await pedir(SERVICIO);
+
+      const tablas = [
+        ...(servicio.tables || []),
+        ...(servicio.layers || [])
+      ];
+
+      for (const tabla of tablas) {
+        const url = SERVICIO + "/" + tabla.id;
+        const detalle = await pedir(url);
+
+        const campos = (detalle.fields || []).map(
+          campo => campo.name
+        );
+
+        const tieneCampos = [
+          "direccion",
+          "ordo_ejecut_real",
+          "ordo_meta"
+        ].every(nombre => campos.includes(nombre));
+
+        if (tieneCampos) {
+          return url;
+        }
+      }
+
+      throw new Error(
+        "No se encontró la tabla con los campos requeridos."
+      );
+    }
+
+    function estadisticas() {
+      return JSON.stringify([
+        {
+          statisticType: "sum",
+          onStatisticField: "ordo_ejecut_real",
+          outStatisticFieldName: "ejecutadas"
+        },
+        {
+          statisticType: "sum",
+          onStatisticField: "ordo_meta",
+          outStatisticFieldName: "meta_total"
+        }
+      ]);
+    }
+
+    async function consultarDirecciones() {
+      const lista = DIRECCIONES.map(function (direccion) {
+        return "'" + direccion.replace(/'/g, "''") + "'";
+      }).join(",");
+
+      const datos = await pedir(tablaURL + "/query", {
+        where: "direccion IN (" + lista + ")",
+        returnGeometry: false,
+        groupByFieldsForStatistics: "direccion",
+        outStatistics: estadisticas()
+      });
+
+      if (datos.exceededTransferLimit) {
+        throw new Error(
+          "El servidor devolvió un resultado incompleto."
+        );
+      }
+
+      return datos;
+    }
+
+    async function consultarGeneral() {
+      // DGIN suma toda la tabla, igual que el calibre original.
+      const datos = await pedir(tablaURL + "/query", {
+        where: "1=1",
+        returnGeometry: false,
+        outStatistics: estadisticas()
+      });
+
+      if (datos.exceededTransferLimit) {
+        throw new Error(
+          "El consolidado recibido está incompleto."
+        );
+      }
+
+      return datos;
+    }
+
+    async function actualizar() {
+      if (ocupado) return;
+
+      ocupado = true;
+      clearTimeout(temporizador);
+
+      $("boton").disabled = true;
+      $("mensaje").textContent =
+        "Consultando direcciones y consolidado…";
+
+      try {
+        if (!tablaURL) {
+          tablaURL = await encontrarTabla();
+        }
+
+        // Consultas independientes:
+        // seis tarjetas por dirección y DGIN sobre toda la tabla.
+        const resultados = await Promise.allSettled([
+          consultarDirecciones(),
+          consultarGeneral()
+        ]);
+
+        const avisos = [];
+
+        if (resultados[0].status === "fulfilled") {
+          const datos = resultados[0].value;
+          const porDireccion = new Map();
+
+          for (const fila of datos.features || []) {
+            const atributos = fila.attributes;
+
+            if (atributos) {
+              porDireccion.set(
+                atributos.direccion,
+                atributos
+              );
+            }
+          }
+
+          for (const direccion of DIRECCIONES) {
+            const valores = leerValores(
+              porDireccion.get(direccion)
+            );
+
+            if (valores) {
+              mostrar(
+                direccion,
+                valores.valor,
+                valores.meta
+              );
+            } else {
+              limpiarTarjeta(
+                direccion,
+                "Sin datos suficientes"
+              );
+
+              avisos.push(
+                "Faltan datos de " + direccion
+              );
+            }
+          }
+
+        } else {
+          DIRECCIONES.forEach(function (direccion) {
+            limpiarTarjeta(
+              direccion,
+              "Consulta no disponible"
+            );
+          });
+
+          avisos.push(
+            "Direcciones: " +
+            (resultados[0].reason?.message ||
+             "Error de consulta")
+          );
+        }
+
+        if (resultados[1].status === "fulfilled") {
+          const datos = resultados[1].value;
+
+          const valores = leerValores(
+            datos.features?.[0]?.attributes
+          );
+
+          if (valores) {
+            mostrar(
+              "TOTAL",
+              valores.valor,
+              valores.meta
+            );
+          } else {
+            limpiarTarjeta(
+              "TOTAL",
+              "Sin datos suficientes"
+            );
+
+            avisos.push(
+              "Faltan datos del consolidado DGIN"
+            );
+          }
+
+        } else {
+          limpiarTarjeta(
+            "TOTAL",
+            "Consulta no disponible"
+          );
+
+          avisos.push(
+            "DGIN: " +
+            (resultados[1].reason?.message ||
+             "Error de consulta")
+          );
+        }
+
+        const hora = new Date().toLocaleTimeString(
+          "es-EC",
+          { timeZone: "America/Guayaquil" }
+        );
+
+        $("mensaje").textContent = avisos.length
+          ? avisos.join(" · ") + " · Consulta: " + hora
+          : "Última consulta: " + hora +
+            " · Actualización automática cada minuto";
+
+      } catch (error) {
+        ["TOTAL", ...DIRECCIONES].forEach(function (id) {
+          limpiarTarjeta(
+            id,
+            "Consulta no disponible"
+          );
+        });
+
+        $("mensaje").textContent =
+          error.message || "Error de conexión.";
+
+      } finally {
+        ocupado = false;
+        $("boton").disabled = false;
+
+        temporizador = setTimeout(
+          actualizar,
+          60000
+        );
+      }
+    }
+
+    function configurarBoton() {
+      $("boton").textContent = "Actualizar datos";
+      $("boton").onclick = actualizar;
+      $("boton").disabled = false;
+    }
+
+    async function iniciarSesion() {
+      $("boton").disabled = true;
+
+      $("mensaje").textContent =
+        "Abriendo inicio de sesión…";
+
+      try {
+        await identity.getCredential(
+          PORTAL + "/sharing"
+        );
+
+        configurarBoton();
+        await actualizar();
+
+      } catch (error) {
+        $("mensaje").textContent =
+          error.message ||
+          "No se completó el inicio de sesión.";
+
+        $("boton").textContent =
+          "Iniciar sesión en ArcGIS";
+
+        $("boton").onclick = iniciarSesion;
+
+      } finally {
+        $("boton").disabled = false;
+      }
+    }
+
+    $("boton").textContent =
+      "Iniciar sesión en ArcGIS";
+
+    $("boton").onclick = iniciarSesion;
+
+    identity.checkSignInStatus(
+      PORTAL + "/sharing"
+    )
+      .then(function () {
+        configurarBoton();
+        actualizar();
+      })
+      .catch(function () {
+        $("mensaje").textContent =
+          "Inicia sesión con tu cuenta institucional.";
+
+        $("boton").disabled = false;
+      });
+
+  }, function () {
+    $("mensaje").textContent =
+      "No se pudieron cargar los componentes de ArcGIS.";
+  });
+
+})();
+</script>
+</body>
+</html>
