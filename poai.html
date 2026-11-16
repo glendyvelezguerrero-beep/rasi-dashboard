@@ -3,8 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>POAI</title>
-
+<title>Estadísticas</title>
 <style>
 * { box-sizing: border-box; }
 body {
@@ -24,24 +23,15 @@ header {
   border-radius: 10px;
 }
 h1 { margin: 0; font-size: 25px; }
-.controles {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
+#error {
+  padding: 10px;
   margin-bottom: 10px;
-  color: #e0edf6;
+  background: #ffe0df;
+  color: #782020;
+  border-radius: 7px;
+  font-size: 13px;
 }
-button {
-  padding: 9px 14px;
-  border: 1px solid #a6cfe4;
-  border-radius: 6px;
-  background: #155570;
-  color: white;
-  cursor: pointer;
-}
-button:disabled { opacity: .6; cursor: wait; }
-#mensaje { font-size: 12px; overflow-wrap: anywhere; }
+#error[hidden] { display: none; }
 .tablero {
   display: grid;
   grid-template-columns: .95fr repeat(3, minmax(0, 1fr));
@@ -122,36 +112,30 @@ text { fill: #172b43; text-anchor: middle; }
 }
 </style>
 </head>
-
 <body>
-<header><h1>POAI</h1></header>
 
-<div class="controles">
-  <button id="boton" type="button" disabled>Conectando…</button>
-  <span id="mensaje" role="status">Cargando ArcGIS…</span>
-</div>
-
+<header><h1 id="titulo"></h1></header>
+<div id="error" role="alert" hidden></div>
 <main id="tablero" class="tablero"></main>
 
-<script src="https://js.arcgis.com/4.31/"></script>
 <script>
 (function () {
   "use strict";
+
+  // El nombre del archivo determina qué estadísticas se muestran.
+  const ES_POAI = location.pathname.toLowerCase().endsWith("/poai.html");
+  const TITULO = ES_POAI ? "POAI" : "Órdenes Operacionales";
+  const CAMPO_REAL = ES_POAI ? "poai_ejecut_real" : "ordo_ejecut_real";
+  const CAMPO_META = ES_POAI ? "poai_ejecut_meta" : "ordo_meta";
+
+  const TABLA =
+    "https://daigeografia.policia.gob.ec/server/rest/services/Hosted/tabla_metas_estadisticas_rasi_vista/FeatureServer/0";
 
   const DIRECCIONES = [
     "DNPJ", "DINASED", "DINIC", "DNIA", "DINAE", "DINAF"
   ];
 
-  const PORTAL = "https://daigeografia.policia.gob.ec/portal";
-  const SERVICIO =
-    "https://daigeografia.policia.gob.ec/server/rest/services/Hosted/tabla_metas_host/FeatureServer";
-  const APP_ID = "7m2AbpLnHeTQUF46";
-
-  // Campos POAI confirmados en tus capturas.
-  const CAMPO_REAL = "poai_ejecut_real";
-  const CAMPO_META = "poai_ejecut_meta";
-
-  // Límites propuestos para el estado de cumplimiento.
+  // Límites propuestos para los estados.
   const LIMITE_CRITICO = 50;
   const LIMITE_ADECUADO = 80;
 
@@ -159,6 +143,12 @@ text { fill: #172b43; text-anchor: middle; }
   const formato = new Intl.NumberFormat("es-EC", {
     maximumFractionDigits: 1
   });
+
+  let ocupado = false;
+  let temporizador;
+
+  document.title = TITULO;
+  $("titulo").textContent = TITULO;
 
   function punto(fraccion, radio) {
     const angulo = Math.PI * (1 - fraccion);
@@ -301,6 +291,7 @@ text { fill: #172b43; text-anchor: middle; }
 
     const porcentaje = valor / meta * 100;
     const avance = Math.max(0, Math.min(100, porcentaje));
+
     const nivel = porcentaje < LIMITE_CRITICO
       ? ["#dc2525", "#ffd6d6", "Crítico"]
       : porcentaje < LIMITE_ADECUADO
@@ -317,13 +308,13 @@ text { fill: #172b43; text-anchor: middle; }
       let etiquetas = "";
       for (let i = 0; i <= 5; i++) {
         const p = punto(i / 5, 166);
-        const numero = Math.round(meta * i / 5);
         etiquetas += `
           <text x="${p.x}" y="${p.y - 4}"
-                style="font-size:12px">${formato.format(numero)}</text>`;
+                style="font-size:12px">${
+                  formato.format(Math.round(meta * i / 5))
+                }</text>`;
       }
       $("TOTAL-etiquetas").innerHTML = etiquetas;
-
     } else {
       $(id + "-arco").style.stroke = nivel[0];
       $(id + "-arco").setAttribute(
@@ -347,63 +338,16 @@ text { fill: #172b43; text-anchor: middle; }
       ? { valor, meta } : null;
   }
 
-  if (typeof window.require !== "function") {
-    $("mensaje").textContent = "No se pudo cargar la biblioteca de ArcGIS.";
-    return;
-  }
+  async function consultar(general) {
+    const lista = DIRECCIONES.map(
+      d => "'" + d.replace(/'/g, "''") + "'"
+    ).join(",");
 
-  require([
-    "esri/identity/OAuthInfo",
-    "esri/identity/IdentityManager",
-    "esri/request"
-  ], function (OAuthInfo, identity, request) {
-
-    let tablaURL;
-    let temporizador;
-    let ocupado = false;
-
-    identity.registerOAuthInfos([
-      new OAuthInfo({
-        appId: APP_ID,
-        portalUrl: PORTAL,
-        popup: false
-      })
-    ]);
-
-    async function pedir(url, parametros = {}) {
-      const respuesta = await request(url, {
-        query: { ...parametros, f: "json" },
-        responseType: "json",
-        timeout: 30000
-      });
-      if (respuesta.data.error) {
-        throw new Error(respuesta.data.error.message || "Error de ArcGIS");
-      }
-      return respuesta.data;
-    }
-
-    async function encontrarTabla() {
-      const servicio = await pedir(SERVICIO);
-      const tablas = [
-        ...(servicio.tables || []),
-        ...(servicio.layers || [])
-      ];
-
-      for (const tabla of tablas) {
-        const url = SERVICIO + "/" + tabla.id;
-        const detalle = await pedir(url);
-        const campos = (detalle.fields || []).map(c => c.name);
-
-        if (["direccion", CAMPO_REAL, CAMPO_META]
-            .every(c => campos.includes(c))) {
-          return url;
-        }
-      }
-      throw new Error("No se encontró la tabla con los campos POAI.");
-    }
-
-    function estadisticas() {
-      return JSON.stringify([
+    const parametros = {
+      f: "json",
+      where: general ? "1=1" : "direccion IN (" + lista + ")",
+      returnGeometry: "false",
+      outStatistics: JSON.stringify([
         {
           statisticType: "sum",
           onStatisticField: CAMPO_REAL,
@@ -414,140 +358,117 @@ text { fill: #172b43; text-anchor: middle; }
           onStatisticField: CAMPO_META,
           outStatisticFieldName: "meta_total"
         }
-      ]);
+      ])
+    };
+
+    if (!general) {
+      parametros.groupByFieldsForStatistics = "direccion";
     }
 
-    async function consultar(general) {
-      const lista = DIRECCIONES.map(
-        d => "'" + d.replace(/'/g, "''") + "'"
-      ).join(",");
+    const url = new URL(TABLA + "/query");
+    url.search = new URLSearchParams(parametros);
 
-      const parametros = {
-        where: general ? "1=1" : "direccion IN (" + lista + ")",
-        returnGeometry: false,
-        outStatistics: estadisticas()
-      };
+    const controlador = new AbortController();
+    const limite = setTimeout(() => controlador.abort(), 30000);
 
-      if (!general) {
-        parametros.groupByFieldsForStatistics = "direccion";
-      }
-
-      const datos = await pedir(tablaURL + "/query", parametros);
-      if (datos.exceededTransferLimit) {
-        throw new Error("El servidor devolvió resultados incompletos.");
-      }
-      return datos;
-    }
-
-    async function actualizar() {
-      if (ocupado) return;
-      ocupado = true;
-      clearTimeout(temporizador);
-      $("boton").disabled = true;
-      $("mensaje").textContent = "Consultando datos POAI…";
-
-      try {
-        if (!tablaURL) tablaURL = await encontrarTabla();
-
-        const resultados = await Promise.allSettled([
-          consultar(false),
-          consultar(true)
-        ]);
-        const avisos = [];
-
-        if (resultados[0].status === "fulfilled") {
-          const mapa = new Map();
-          for (const fila of resultados[0].value.features || []) {
-            if (fila.attributes) {
-              mapa.set(fila.attributes.direccion, fila.attributes);
-            }
-          }
-          for (const direccion of DIRECCIONES) {
-            const valores = leer(mapa.get(direccion));
-            if (valores) {
-              mostrar(direccion, valores.valor, valores.meta);
-            } else {
-              limpiar(direccion, "Sin datos suficientes");
-              avisos.push("Faltan datos de " + direccion);
-            }
-          }
-        } else {
-          DIRECCIONES.forEach(d => limpiar(d, "Consulta no disponible"));
-          avisos.push(resultados[0].reason?.message || "Error en direcciones");
-        }
-
-        if (resultados[1].status === "fulfilled") {
-          const valores = leer(
-            resultados[1].value.features?.[0]?.attributes
-          );
-          if (valores) {
-            mostrar("TOTAL", valores.valor, valores.meta);
-          } else {
-            limpiar("TOTAL", "Sin datos suficientes");
-            avisos.push("Faltan datos de DGIN");
-          }
-        } else {
-          limpiar("TOTAL", "Consulta no disponible");
-          avisos.push(resultados[1].reason?.message || "Error en DGIN");
-        }
-
-        const hora = new Date().toLocaleTimeString("es-EC", {
-          timeZone: "America/Guayaquil"
-        });
-        $("mensaje").textContent = avisos.length
-          ? avisos.join(" · ") + " · Consulta: " + hora
-          : "Última consulta: " + hora + " · Actualización cada minuto";
-
-      } catch (error) {
-        ["TOTAL", ...DIRECCIONES].forEach(
-          id => limpiar(id, "Consulta no disponible")
-        );
-        $("mensaje").textContent = error.message;
-      } finally {
-        ocupado = false;
-        $("boton").disabled = false;
-        temporizador = setTimeout(actualizar, 60000);
-      }
-    }
-
-    function configurarBoton() {
-      $("boton").textContent = "Actualizar datos";
-      $("boton").onclick = actualizar;
-      $("boton").disabled = false;
-    }
-
-    async function iniciarSesion() {
-      $("boton").disabled = true;
-      $("mensaje").textContent = "Abriendo inicio de sesión…";
-      try {
-        await identity.getCredential(PORTAL + "/sharing");
-        configurarBoton();
-        await actualizar();
-      } catch (error) {
-        $("mensaje").textContent = error.message;
-        $("boton").textContent = "Iniciar sesión en ArcGIS";
-        $("boton").onclick = iniciarSesion;
-      } finally {
-        $("boton").disabled = false;
-      }
-    }
-
-    $("boton").textContent = "Iniciar sesión en ArcGIS";
-    $("boton").onclick = iniciarSesion;
-
-    identity.checkSignInStatus(PORTAL + "/sharing")
-      .then(function () {
-        configurarBoton();
-        actualizar();
-      })
-      .catch(function () {
-        $("mensaje").textContent = "Inicia sesión con tu cuenta institucional.";
-        $("boton").disabled = false;
+    try {
+      const respuesta = await fetch(url, {
+        credentials: "omit",
+        cache: "no-store",
+        signal: controlador.signal
       });
 
-  }, function () {
-    $("mensaje").textContent = "No se pudieron cargar los componentes de ArcGIS.";
-  });
+      if (!respuesta.ok) {
+        throw new Error("Error HTTP " + respuesta.status);
+      }
+
+      const datos = await respuesta.json();
+
+      if (datos.error) {
+        throw new Error(datos.error.message || "Error de ArcGIS");
+      }
+      if (datos.exceededTransferLimit) {
+        throw new Error("Resultados incompletos del servidor");
+      }
+
+      return datos;
+    } finally {
+      clearTimeout(limite);
+    }
+  }
+
+  async function actualizar() {
+    if (ocupado) return;
+    ocupado = true;
+    clearTimeout(temporizador);
+
+    const avisos = [];
+
+    try {
+      const resultados = await Promise.allSettled([
+        consultar(false),
+        consultar(true)
+      ]);
+
+      if (resultados[0].status === "fulfilled") {
+        const mapa = new Map();
+
+        for (const fila of resultados[0].value.features || []) {
+          if (fila.attributes) {
+            mapa.set(fila.attributes.direccion, fila.attributes);
+          }
+        }
+
+        for (const direccion of DIRECCIONES) {
+          const valores = leer(mapa.get(direccion));
+          if (valores) {
+            mostrar(direccion, valores.valor, valores.meta);
+          } else {
+            limpiar(direccion, "Sin datos suficientes");
+            avisos.push("Faltan datos de " + direccion);
+          }
+        }
+      } else {
+        DIRECCIONES.forEach(d => limpiar(d, "Consulta no disponible"));
+        avisos.push(
+          resultados[0].reason?.message || "Error en direcciones"
+        );
+      }
+
+      if (resultados[1].status === "fulfilled") {
+        const valores = leer(
+          resultados[1].value.features?.[0]?.attributes
+        );
+        if (valores) {
+          mostrar("TOTAL", valores.valor, valores.meta);
+        } else {
+          limpiar("TOTAL", "Sin datos suficientes");
+          avisos.push("Faltan datos del consolidado");
+        }
+      } else {
+        limpiar("TOTAL", "Consulta no disponible");
+        avisos.push(
+          resultados[1].reason?.message || "Error en consolidado"
+        );
+      }
+    } catch (error) {
+      ["TOTAL", ...DIRECCIONES].forEach(
+        id => limpiar(id, "Consulta no disponible")
+      );
+      avisos.push(error.message || "Error de conexión");
+    } finally {
+      $("error").textContent = avisos.join(" · ");
+      $("error").hidden = avisos.length === 0;
+      ocupado = false;
+      temporizador = setTimeout(actualizar, 60000);
+    }
+  }
+
+  actualizar();
+})();
+</script>
+</body>
+</html>
 })();
 </script>
 </body>
