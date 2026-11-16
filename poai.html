@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>POAI</title>
+
+<style>
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  padding: 10px;
+  background: #102333;
+  color: #172b43;
+  font-family: Arial, sans-serif;
+}
+header {
+  padding: 14px;
+  margin-bottom: 10px;
+  text-align: center;
+  background: #155570;
+  color: white;
+  border: 1px solid #9bc8df;
+  border-radius: 10px;
+}
+h1 { margin: 0; font-size: 25px; }
+.controles {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 10px;
+  color: #e0edf6;
+}
+button {
+  padding: 9px 14px;
+  border: 1px solid #a6cfe4;
+  border-radius: 6px;
+  background: #155570;
+  color: white;
+  cursor: pointer;
+}
+button:disabled { opacity: .6; cursor: wait; }
+#mensaje { font-size: 12px; overflow-wrap: anywhere; }
+.tablero {
+  display: grid;
+  grid-template-columns: .95fr repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.tarjeta {
+  min-width: 0;
+  overflow: hidden;
+  padding-bottom: 14px;
+  text-align: center;
+  background: #bdd0de;
+  border: 2px solid #e1f3ff;
+  border-radius: 10px;
+}
+h2 {
+  margin: 0;
+  padding: 10px;
+  background: #155570;
+  color: white;
+  font-size: 18px;
+}
+.general {
+  grid-row: span 2;
+  display: flex;
+  flex-direction: column;
+}
+.general .contenido {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.subtitulo {
+  margin: 22px 8px;
+  color: #155570;
+  font-size: 14px;
+  font-weight: bold;
+}
+svg {
+  display: block;
+  width: 100%;
+  max-width: 340px;
+  margin: auto;
+}
+.general svg { max-width: 440px; }
+text { fill: #172b43; text-anchor: middle; }
+.pista, .avance { fill: none; stroke-width: 22; }
+.pista { stroke: #edf2f5; }
+.avance { stroke: #8596a2; }
+.numero { font-size: 42px; font-weight: bold; }
+.meta { font-size: 16px; }
+.extremo { font-size: 13px; }
+.porcentaje {
+  display: inline-block;
+  padding: 6px 16px;
+  border: 1px solid #879eac;
+  border-radius: 7px;
+  background: #e5edf2;
+  font-size: 23px;
+  font-weight: bold;
+}
+.estado {
+  margin-top: 8px;
+  font-size: 14px;
+  font-weight: bold;
+}
+@media (max-width: 850px) {
+  .tablero { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .general { grid-column: 1 / -1; grid-row: auto; }
+  .general svg { max-width: 360px; }
+}
+@media (max-width: 550px) {
+  .tablero { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  h1 { font-size: 21px; }
+}
+@media (max-width: 350px) {
+  .tablero { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+
+<body>
+<header><h1>POAI</h1></header>
+
+<div class="controles">
+  <button id="boton" type="button" disabled>Conectando…</button>
+  <span id="mensaje" role="status">Cargando ArcGIS…</span>
+</div>
+
+<main id="tablero" class="tablero"></main>
+
+<script src="https://js.arcgis.com/4.31/"></script>
+<script>
+(function () {
+  "use strict";
+
+  const DIRECCIONES = [
+    "DNPJ", "DINASED", "DINIC", "DNIA", "DINAE", "DINAF"
+  ];
+
+  const PORTAL = "https://daigeografia.policia.gob.ec/portal";
+  const SERVICIO =
+    "https://daigeografia.policia.gob.ec/server/rest/services/Hosted/tabla_metas_host/FeatureServer";
+  const APP_ID = "7m2AbpLnHeTQUF46";
+
+  // Campos POAI confirmados en tus capturas.
+  const CAMPO_REAL = "poai_ejecut_real";
+  const CAMPO_META = "poai_ejecut_meta";
+
+  // Límites propuestos para el estado de cumplimiento.
+  const LIMITE_CRITICO = 50;
+  const LIMITE_ADECUADO = 80;
+
+  const $ = id => document.getElementById(id);
+  const formato = new Intl.NumberFormat("es-EC", {
+    maximumFractionDigits: 1
+  });
+
+  function punto(fraccion, radio) {
+    const angulo = Math.PI * (1 - fraccion);
+    return {
+      x: 180 + radio * Math.cos(angulo),
+      y: 170 - radio * Math.sin(angulo)
+    };
+  }
+
+  function arco(inicio, fin, radio) {
+    const a = punto(inicio, radio);
+    const b = punto(fin, radio);
+    return `M ${a.x} ${a.y} A ${radio} ${radio} 0 0 1 ${b.x} ${b.y}`;
+  }
+
+  function crearGeneral() {
+    const tarjeta = document.createElement("section");
+    tarjeta.className = "tarjeta general";
+    tarjeta.innerHTML = `
+      <h2>DGIN</h2>
+      <div class="contenido">
+        <p class="subtitulo">CONSOLIDADO GENERAL</p>
+        <svg viewBox="0 0 360 245"
+             role="img" aria-labelledby="TOTAL-lectura">
+          <title id="TOTAL-lectura">Sin consultar</title>
+          <g id="TOTAL-franjas"></g>
+          <g id="TOTAL-marcas"></g>
+          <g id="TOTAL-etiquetas"></g>
+          <polygon id="TOTAL-aguja"
+            points="176,170 184,170 180,43"
+            fill="#101820" visibility="hidden"/>
+          <circle cx="180" cy="170" r="5" fill="#101820"/>
+          <text id="TOTAL-valor" x="180" y="207"
+                style="font-size:36px">—</text>
+          <text id="TOTAL-meta" x="180" y="231"
+                style="font-size:14px">Sin consultar</text>
+        </svg>
+        <div>
+          <span id="TOTAL-porcentaje" class="porcentaje">—</span>
+        </div>
+        <div id="TOTAL-estado" class="estado">Sin consultar</div>
+      </div>`;
+    $("tablero").appendChild(tarjeta);
+
+    const franjas = [
+      [0, .50, "#e42525"],
+      [.50, .70, "#ff7b12"],
+      [.70, .85, "#edbe00"],
+      [.85, .95, "#65a713"],
+      [.95, 1, "#12803a"]
+    ];
+
+    $("TOTAL-franjas").innerHTML = franjas.map(f =>
+      `<path d="${arco(f[0], f[1], 125)}"
+             fill="none" stroke="${f[2]}" stroke-width="28"/>`
+    ).join("");
+
+    let marcas = "";
+    for (let i = 0; i <= 40; i++) {
+      const a = punto(i / 40, 140);
+      const b = punto(i / 40, i % 8 === 0 ? 154 : 149);
+      marcas += `
+        <line x1="${a.x}" y1="${a.y}"
+              x2="${b.x}" y2="${b.y}"
+              stroke="#34434e"
+              stroke-width="${i % 8 === 0 ? 3 : 2}"/>`;
+    }
+    $("TOTAL-marcas").innerHTML = marcas;
+  }
+
+  function crearDireccion(id) {
+    const tarjeta = document.createElement("section");
+    tarjeta.className = "tarjeta";
+    tarjeta.innerHTML = `
+      <h2>${id}</h2>
+      <svg viewBox="0 0 300 200"
+           role="img" aria-labelledby="${id}-lectura">
+        <title id="${id}-lectura">Sin consultar</title>
+        <path class="pista"
+              d="M40 145 A110 110 0 0 1 260 145"/>
+        <path id="${id}-arco" class="avance"
+              d="M40 145 A110 110 0 0 1 260 145"
+              pathLength="100" stroke-dasharray="0 100"/>
+        <text id="${id}-valor" class="numero"
+              x="150" y="120">—</text>
+        <text id="${id}-meta" class="meta"
+              x="150" y="148">Sin consultar</text>
+        <text class="extremo" x="40" y="178">0</text>
+        <text id="${id}-maximo" class="extremo"
+              x="260" y="178">—</text>
+      </svg>
+      <div>
+        <span id="${id}-porcentaje" class="porcentaje">—</span>
+      </div>
+      <div id="${id}-estado" class="estado">Sin consultar</div>`;
+    $("tablero").appendChild(tarjeta);
+  }
+
+  crearGeneral();
+  DIRECCIONES.forEach(crearDireccion);
+
+  function limpiar(id, estado) {
+    $(id + "-valor").textContent = "—";
+    $(id + "-meta").textContent = "Datos no disponibles";
+    $(id + "-porcentaje").textContent = "—";
+    $(id + "-porcentaje").style.background = "#e5edf2";
+    $(id + "-estado").textContent = estado;
+    $(id + "-lectura").textContent = estado;
+
+    if (id === "TOTAL") {
+      $("TOTAL-aguja").setAttribute("visibility", "hidden");
+      $("TOTAL-etiquetas").innerHTML = "";
+    } else {
+      $(id + "-maximo").textContent = "—";
+      $(id + "-arco").setAttribute("stroke-dasharray", "0 100");
+    }
+  }
+
+  function mostrar(id, valor, meta) {
+    $(id + "-valor").textContent = formato.format(valor);
+    $(id + "-meta").textContent = "de " + formato.format(meta);
+
+    if (id !== "TOTAL") {
+      $(id + "-maximo").textContent = formato.format(meta);
+    }
+
+    if (meta <= 0) {
+      if (id === "TOTAL") {
+        $("TOTAL-aguja").setAttribute("visibility", "hidden");
+        $("TOTAL-etiquetas").innerHTML = "";
+      } else {
+        $(id + "-arco").setAttribute("stroke-dasharray", "0 100");
+      }
+      $(id + "-porcentaje").textContent = "Sin meta";
+      $(id + "-porcentaje").style.background = "#e5edf2";
+      $(id + "-estado").textContent = "Porcentaje no calculable";
+      $(id + "-lectura").textContent = "Sin meta mayor que cero";
+      return;
+    }
+
+    const porcentaje = valor / meta * 100;
+    const avance = Math.max(0, Math.min(100, porcentaje));
+    const nivel = porcentaje < LIMITE_CRITICO
+      ? ["#dc2525", "#ffd6d6", "Crítico"]
+      : porcentaje < LIMITE_ADECUADO
+      ? ["#ffc400", "#fff0aa", "En riesgo"]
+      : ["#15943b", "#cceecb", "Adecuado"];
+
+    if (id === "TOTAL") {
+      $("TOTAL-aguja").setAttribute(
+        "transform",
+        `rotate(${-90 + avance * 1.8} 180 170)`
+      );
+      $("TOTAL-aguja").setAttribute("visibility", "visible");
+
+      let etiquetas = "";
+      for (let i = 0; i <= 5; i++) {
+        const p = punto(i / 5, 166);
+        const numero = Math.round(meta * i / 5);
+        etiquetas += `
+          <text x="${p.x}" y="${p.y - 4}"
+                style="font-size:12px">${formato.format(numero)}</text>`;
+      }
+      $("TOTAL-etiquetas").innerHTML = etiquetas;
+
+    } else {
+      $(id + "-arco").style.stroke = nivel[0];
+      $(id + "-arco").setAttribute(
+        "stroke-dasharray", avance + " " + (100 - avance)
+      );
+    }
+
+    $(id + "-porcentaje").textContent =
+      formato.format(porcentaje) + " %";
+    $(id + "-porcentaje").style.background = nivel[1];
+    $(id + "-estado").textContent = nivel[2];
+    $(id + "-lectura").textContent =
+      `${valor} de ${meta}. ${formato.format(porcentaje)} por ciento. ${nivel[2]}`;
+  }
+
+  function leer(a) {
+    if (!a || a.ejecutadas == null || a.meta_total == null) return null;
+    const valor = Number(a.ejecutadas);
+    const meta = Number(a.meta_total);
+    return Number.isFinite(valor) && Number.isFinite(meta)
+      ? { valor, meta } : null;
+  }
+
+  if (typeof window.require !== "function") {
+    $("mensaje").textContent = "No se pudo cargar la biblioteca de ArcGIS.";
+    return;
+  }
+
+  require([
+    "esri/identity/OAuthInfo",
+    "esri/identity/IdentityManager",
+    "esri/request"
+  ], function (OAuthInfo, identity, request) {
+
+    let tablaURL;
+    let temporizador;
+    let ocupado = false;
+
+    identity.registerOAuthInfos([
+      new OAuthInfo({
+        appId: APP_ID,
+        portalUrl: PORTAL,
+        popup: false
+      })
+    ]);
+
+    async function pedir(url, parametros = {}) {
+      const respuesta = await request(url, {
+        query: { ...parametros, f: "json" },
+        responseType: "json",
+        timeout: 30000
+      });
+      if (respuesta.data.error) {
+        throw new Error(respuesta.data.error.message || "Error de ArcGIS");
+      }
+      return respuesta.data;
+    }
+
+    async function encontrarTabla() {
+      const servicio = await pedir(SERVICIO);
+      const tablas = [
+        ...(servicio.tables || []),
+        ...(servicio.layers || [])
+      ];
+
+      for (const tabla of tablas) {
+        const url = SERVICIO + "/" + tabla.id;
+        const detalle = await pedir(url);
+        const campos = (detalle.fields || []).map(c => c.name);
+
+        if (["direccion", CAMPO_REAL, CAMPO_META]
+            .every(c => campos.includes(c))) {
+          return url;
+        }
+      }
+      throw new Error("No se encontró la tabla con los campos POAI.");
+    }
+
+    function estadisticas() {
+      return JSON.stringify([
+        {
+          statisticType: "sum",
+          onStatisticField: CAMPO_REAL,
+          outStatisticFieldName: "ejecutadas"
+        },
+        {
+          statisticType: "sum",
+          onStatisticField: CAMPO_META,
+          outStatisticFieldName: "meta_total"
+        }
+      ]);
+    }
+
+    async function consultar(general) {
+      const lista = DIRECCIONES.map(
+        d => "'" + d.replace(/'/g, "''") + "'"
+      ).join(",");
+
+      const parametros = {
+        where: general ? "1=1" : "direccion IN (" + lista + ")",
+        returnGeometry: false,
+        outStatistics: estadisticas()
+      };
+
+      if (!general) {
+        parametros.groupByFieldsForStatistics = "direccion";
+      }
+
+      const datos = await pedir(tablaURL + "/query", parametros);
+      if (datos.exceededTransferLimit) {
+        throw new Error("El servidor devolvió resultados incompletos.");
+      }
+      return datos;
+    }
+
+    async function actualizar() {
+      if (ocupado) return;
+      ocupado = true;
+      clearTimeout(temporizador);
+      $("boton").disabled = true;
+      $("mensaje").textContent = "Consultando datos POAI…";
+
+      try {
+        if (!tablaURL) tablaURL = await encontrarTabla();
+
+        const resultados = await Promise.allSettled([
+          consultar(false),
+          consultar(true)
+        ]);
+        const avisos = [];
+
+        if (resultados[0].status === "fulfilled") {
+          const mapa = new Map();
+          for (const fila of resultados[0].value.features || []) {
+            if (fila.attributes) {
+              mapa.set(fila.attributes.direccion, fila.attributes);
+            }
+          }
+          for (const direccion of DIRECCIONES) {
+            const valores = leer(mapa.get(direccion));
+            if (valores) {
+              mostrar(direccion, valores.valor, valores.meta);
+            } else {
+              limpiar(direccion, "Sin datos suficientes");
+              avisos.push("Faltan datos de " + direccion);
+            }
+          }
+        } else {
+          DIRECCIONES.forEach(d => limpiar(d, "Consulta no disponible"));
+          avisos.push(resultados[0].reason?.message || "Error en direcciones");
+        }
+
+        if (resultados[1].status === "fulfilled") {
+          const valores = leer(
+            resultados[1].value.features?.[0]?.attributes
+          );
+          if (valores) {
+            mostrar("TOTAL", valores.valor, valores.meta);
+          } else {
+            limpiar("TOTAL", "Sin datos suficientes");
+            avisos.push("Faltan datos de DGIN");
+          }
+        } else {
+          limpiar("TOTAL", "Consulta no disponible");
+          avisos.push(resultados[1].reason?.message || "Error en DGIN");
+        }
+
+        const hora = new Date().toLocaleTimeString("es-EC", {
+          timeZone: "America/Guayaquil"
+        });
+        $("mensaje").textContent = avisos.length
+          ? avisos.join(" · ") + " · Consulta: " + hora
+          : "Última consulta: " + hora + " · Actualización cada minuto";
+
+      } catch (error) {
+        ["TOTAL", ...DIRECCIONES].forEach(
+          id => limpiar(id, "Consulta no disponible")
+        );
+        $("mensaje").textContent = error.message;
+      } finally {
+        ocupado = false;
+        $("boton").disabled = false;
+        temporizador = setTimeout(actualizar, 60000);
+      }
+    }
+
+    function configurarBoton() {
+      $("boton").textContent = "Actualizar datos";
+      $("boton").onclick = actualizar;
+      $("boton").disabled = false;
+    }
+
+    async function iniciarSesion() {
+      $("boton").disabled = true;
+      $("mensaje").textContent = "Abriendo inicio de sesión…";
+      try {
+        await identity.getCredential(PORTAL + "/sharing");
+        configurarBoton();
+        await actualizar();
+      } catch (error) {
+        $("mensaje").textContent = error.message;
+        $("boton").textContent = "Iniciar sesión en ArcGIS";
+        $("boton").onclick = iniciarSesion;
+      } finally {
+        $("boton").disabled = false;
+      }
+    }
+
+    $("boton").textContent = "Iniciar sesión en ArcGIS";
+    $("boton").onclick = iniciarSesion;
+
+    identity.checkSignInStatus(PORTAL + "/sharing")
+      .then(function () {
+        configurarBoton();
+        actualizar();
+      })
+      .catch(function () {
+        $("mensaje").textContent = "Inicia sesión con tu cuenta institucional.";
+        $("boton").disabled = false;
+      });
+
+  }, function () {
+    $("mensaje").textContent = "No se pudieron cargar los componentes de ArcGIS.";
+  });
+})();
+</script>
+</body>
+</html>
